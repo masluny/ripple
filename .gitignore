@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.env
+data/raw/
+data/interim/
+data/processed/
+data/logs/
+artifacts/
+node_modules/
+app/web/dist/
+.DS_Store
+.ipynb_checkpoints/

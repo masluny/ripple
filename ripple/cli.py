@@ -1,0 +1,116 @@
+"""Command line entry point: ``uv run ripple --help``."""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, date, datetime, timedelta
+
+import typer
+from rich.console import Console
+
+from ripple import config
+
+app = typer.Typer(no_args_is_help=True, add_completion=False)
+collect = typer.Typer(no_args_is_help=True, help="Data collectors (run by launchd, see scripts/).")
+app.add_typer(collect, name="collect")
+console = Console()
+
+
+@app.callback()
+def _main(verbose: bool = typer.Option(False, "-v")) -> None:
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    config.ensure_dirs()
+
+
+def _yesterday() -> str:
+    return (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+
+
+@collect.command("states")
+def collect_states() -> None:
+    """One anonymous OpenSky state-vector snapshot of the WAW area (run every 4 min)."""
+    from ripple.collect.opensky import poll_states_once
+
+    n = poll_states_once()
+    console.print(f"{datetime.now(UTC):%H:%M:%S} states: {n} aircraft")
+
+
+@collect.command("taf")
+def collect_taf() -> None:
+    """Archive current TAFs for the whole network (run hourly)."""
+    from ripple.collect.weather import poll_taf
+
+    console.print(f"TAF: {poll_taf()} reports")
+
+
+@collect.command("metar")
+def collect_metar(
+    start: str = typer.Option(None, help="YYYY-MM-DD; default = last 3 days"),
+    end: str = typer.Option(None, help="YYYY-MM-DD (exclusive)"),
+) -> None:
+    """Download METARs from the IEM archive."""
+    from ripple.collect.weather import backfill_metar, update_metar_archive
+
+    if start:
+        end_d = date.fromisoformat(end) if end else datetime.now(UTC).date()
+        backfill_metar(date.fromisoformat(start), end_d)
+    else:
+        update_metar_archive()
+    console.print("METAR archive updated")
+
+
+@collect.command("schedules")
+def collect_schedules(
+    day: str = typer.Option(None, help="Local date YYYY-MM-DD; default = yesterday"),
+    retain_days: int = typer.Option(0, help="Delete raw files older than N days (0 = keep)"),
+) -> None:
+    """WAW scheduled/actual times from AeroDataBox (needs AERODATABOX_KEY)."""
+    from ripple.collect.schedules import collect_day, purge_older_than
+
+    console.print(f"saved {collect_day(day or _yesterday())}")
+    if retain_days:
+        console.print(f"purged {purge_older_than(retain_days)} raw files")
+
+
+@collect.command("opensky-flights")
+def collect_opensky_flights(
+    day: str = typer.Option(None, help="UTC date; default = yesterday"),
+) -> None:
+    """EPWA departures/arrivals from OpenSky /flights (needs OPENSKY_CLIENT_ID/SECRET)."""
+    from ripple.collect.opensky import fetch_hub_flights
+
+    console.print(f"saved {fetch_hub_flights(day or _yesterday())}")
+
+
+@collect.command("aircraft-db")
+def collect_aircraft_db() -> None:
+    """Download the OpenSky aircraft database and keep the LOT fleet."""
+    from ripple.collect.aircraft import update_fleet
+
+    console.print(f"saved {update_fleet()}")
+
+
+@collect.command("daily")
+def collect_daily() -> None:
+    """Everything that runs once a day; each source is skipped if its credentials are missing."""
+    import os
+
+    from ripple.collect.weather import update_metar_archive
+
+    update_metar_archive()
+    console.print("METAR ok")
+    if os.environ.get("OPENSKY_CLIENT_ID"):
+        collect_opensky_flights(None)
+    else:
+        console.print("OpenSky flights skipped (no credentials)")
+    if os.environ.get("AERODATABOX_KEY"):
+        collect_schedules(None, int(os.environ.get("AERODATABOX_RETAIN_DAYS", "0")))
+    else:
+        console.print("AeroDataBox skipped (no key)")
+
+
+if __name__ == "__main__":
+    app()
