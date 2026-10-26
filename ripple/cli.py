@@ -125,5 +125,57 @@ def build(
     console.print(f"dataset written to {path}")
 
 
+@app.command()
+def train(
+    model: str = typer.Argument(..., help="variant name, e.g. lgbm, gnn, gnn_norot"),
+    dataset: str = typer.Option("synthetic"),
+    epochs: int = typer.Option(None, help="GNN only"),
+) -> None:
+    """Train one model variant (see ripple.pipeline.VARIANTS)."""
+    from ripple.pipeline import Experiment
+
+    kw = {"epochs": epochs} if epochs else {}
+    Experiment(dataset).train(model, **kw)
+    console.print(f"trained {model} on {dataset}")
+
+
+@app.command()
+def evaluate(
+    models: str = typer.Option("lgbm,gnn", help="comma-separated variants"),
+    dataset: str = typer.Option("synthetic"),
+) -> None:
+    """Evaluate trained variants on the test split and write reports/<dataset>/."""
+    from ripple.eval.report import write_report
+    from ripple.pipeline import Experiment
+
+    exp = Experiment(dataset)
+    res = exp.evaluate(models.split(","))
+    console.print(write_report(exp, res))
+
+
+@app.command("run-all")
+def run_all(
+    dataset: str = typer.Option("synthetic"),
+    ablations: bool = typer.Option(True, help="also train ablation variants"),
+    rebuild: bool = typer.Option(False, help="rebuild the dataset first"),
+) -> None:
+    """Build data (if needed), train LightGBM + GNN (+ ablations), evaluate, write the report."""
+    from ripple.data.build import build_real, build_synthetic, dataset_dir
+    from ripple.eval.report import write_report
+    from ripple.pipeline import Experiment
+
+    if rebuild or not (dataset_dir(dataset) / "flights.parquet").exists():
+        build_synthetic() if dataset == "synthetic" else build_real()
+    variants = ["lgbm", "gnn"]
+    if ablations:
+        variants += ["lgbm_noweather", "gnn_norot", "gnn_noconn", "gnn_noapt", "gnn_noweather",
+                     "gnn_nogru"]  # fmt: skip
+    exp = Experiment(dataset)
+    for v in variants:
+        console.print(f"[bold]training {v}[/bold]")
+        exp.train(v)
+    console.print(write_report(exp, exp.evaluate(variants)))
+
+
 if __name__ == "__main__":
     app()

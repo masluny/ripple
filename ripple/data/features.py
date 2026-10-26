@@ -333,3 +333,22 @@ def horizon_rows(store: FeatureStore, horizons=config.HORIZONS) -> pd.DataFrame:
         t = np.floor((store.sd[idx] - 60 * h) / SLOT) * SLOT
         out.append(pd.DataFrame({"idx": idx, "h": h, "t": t}))
     return pd.concat(out, ignore_index=True)
+
+
+MAX_LEAD = 390  # minutes ahead (6.5 h) for which a flight is a prediction target
+MAX_OVERDUE = 180  # keep predicting a flight up to 3 h after its scheduled departure if not gone
+
+
+def snapshot_rows(store: FeatureStore, mask: np.ndarray, stride: int = SLOT) -> pd.DataFrame:
+    """Every (flight, t) with t on the 30-min grid where the flight is still a prediction target:
+    not departed yet and scheduled within [t - MAX_OVERDUE, t + MAX_LEAD]."""
+    idx = np.where(mask & ~np.isnan(store.ad) & ~np.isnan(store.aa))[0]
+    sd, ad = store.sd[idx], store.ad[idx]
+    first = np.ceil((sd - MAX_LEAD) / stride) * stride
+    last = np.minimum(
+        np.ceil(ad / stride) * stride - stride, np.floor((sd + MAX_OVERDUE) / stride) * stride
+    )
+    n = np.maximum(((last - first) // stride + 1).astype(int), 0)
+    rep = np.repeat(np.arange(len(idx)), n)
+    k = np.arange(n.sum()) - np.repeat(np.cumsum(n) - n, n)
+    return pd.DataFrame({"idx": idx[rep], "t": first[rep] + stride * k})
