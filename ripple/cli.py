@@ -112,5 +112,18 @@ def collect_daily() -> None:
         console.print("AeroDataBox skipped (no key)")
 
 
+@app.command()
+def build(
+    source: str = typer.Option("synthetic", help="synthetic | real"),
+    days: int = typer.Option(365, help="synthetic only"),
+    seed: int = typer.Option(7, help="synthetic only"),
+) -> None:
+    """Assemble flights + weather tables into data/processed/<source>/."""
+    from ripple.data.build import build_real, build_synthetic
+
+    path = build_synthetic(days=days, seed=seed) if source == "synthetic" else build_real()
+    console.print(f"dataset written to {path}")
+
+
 if __name__ == "__main__":
     app()
