@@ -18,8 +18,9 @@ def pinball(y: np.ndarray, q: np.ndarray, taus: np.ndarray = TAUS) -> np.ndarray
 def crps(y: np.ndarray, q: np.ndarray) -> float:
     """CRPS approximated by 2 x average pinball loss over the 19 equally spaced quantiles.
 
-    It ignores the outer 5% tails, so it slightly underestimates the true CRPS. Every model is
-    scored the same way, so the comparison stays fair.
+    It leaves out the outer 5% tails, where pinball loss is small, so it comes out slightly
+    *above* the exact CRPS (about 4% for a Gaussian). Every model is scored the same way, so the
+    comparison stays fair.
     """
     return float(2 * pinball(y, q).mean())
 

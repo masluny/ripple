@@ -20,6 +20,7 @@ dependencies = [
     "torch-geometric>=2.6",
     "fastapi>=0.111",
     "uvicorn>=0.30",
+    "anthropic>=2.3.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ dev = [
     "ipykernel>=6.29",
     "nbconvert>=7.16",
     "seaborn>=0.13",
+    "scipy>=1.18.1",
 ]
 
 [project.scripts]

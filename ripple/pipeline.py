@@ -11,10 +11,10 @@ from functools import cached_property
 import numpy as np
 import pandas as pd
 
-from ripple import config
+from ripple import config, isolate
 from ripple.data.build import chronological_split, load
 from ripple.data.features import SLOT, FeatureStore, snapshot_rows
-from ripple.eval import metrics
+from ripple.eval import calibration, metrics
 from ripple.eval.connections import (
     enroute_deviation_quantiles,
     inbound_arrival_quantiles,
@@ -127,15 +127,41 @@ class Experiment:
         cp["miss"] = ((st.ad[cp.out_idx] - st.aa[cp.in_idx]) < mct).astype(float)
         return hz, cp
 
-    def predict_requests(self, model) -> tuple[pd.DataFrame, dict]:
+    def predict_requests(self, variant: str) -> tuple[pd.DataFrame, dict]:
         hz, cp = self.eval_requests
         req = pd.concat([
             hz[["idx", "t"]],
             cp[["out_idx", "t"]].rename(columns={"out_idx": "idx"}),
             cp[["in_idx", "t"]].rename(columns={"in_idx": "idx"}),
         ]).drop_duplicates().sort_values(["t", "idx"]).reset_index(drop=True)  # fmt: skip
-        pred = model.predict(self.store, req)
+        pred = isolate.run(isolate.predict_variant, self.dataset, variant, req)
         return req, pred
+
+    def val_rows(self) -> pd.DataFrame:
+        """Validation horizon rows, used only to fit the post-hoc quantile calibration."""
+        st = self.store
+        idx = np.where(self.split["val"] & ~np.isnan(st.ad) & ~np.isnan(st.aa))[0]
+        rows = [pd.DataFrame({"idx": idx, "t": np.floor((st.sd[idx] - 60 * h) / SLOT) * SLOT})
+                for h in config.HORIZONS]  # fmt: skip
+        return pd.concat(rows).sort_values(["t", "idx"]).reset_index(drop=True)
+
+    def fit_calibration(self, variant: str) -> dict[str, np.ndarray]:
+        rows = self.val_rows()
+        pred = isolate.run(isolate.predict_variant, self.dataset, variant, rows)
+        y = self.store.targets(rows.idx.to_numpy())
+        off = {
+            tgt: calibration.fit_offsets(y[:, k], pred[tgt]) for k, tgt in enumerate(("dep", "arr"))
+        }
+        calibration.save(self.art_dir / variant / "calibration.json", off)
+        return off
+
+    def attribution_rows(self, n: int = 1500) -> pd.DataFrame:
+        """Test flights that left >= 20 min late, explained 1 h before departure."""
+        st = self.store
+        idx = np.where(self.split["test"] & ((st.ad - st.sd) >= 20))[0]
+        idx = np.random.default_rng(self.seed).choice(idx, min(n, len(idx)), replace=False)
+        t = np.floor((st.sd[idx] - 60) / SLOT) * SLOT
+        return pd.DataFrame({"idx": idx, "t": t}).sort_values(["t", "idx"]).reset_index(drop=True)
 
     def evaluate(self, variants: list[str]) -> dict:
         st = self.store
@@ -145,15 +171,15 @@ class Experiment:
         base_rate = None
         results: dict = {"dataset": self.dataset, "models": {}}
         self.report_dir.mkdir(parents=True, exist_ok=True)
-        pred_store = {}
         for v in variants:
             path = self.art_dir / v
             if not path.exists():
                 log.warning("skip %s: not trained", v)
                 continue
-            model = self.load_model(v)
             t0 = time.time()
-            req, pred = self.predict_requests(model)
+            req, raw = self.predict_requests(v)
+            off = self.fit_calibration(v)
+            pred = {tgt: calibration.apply_offsets(raw[tgt], off[tgt]) for tgt in raw}
             log.info("predicted %s: %d requests in %.0fs", v, len(req), time.time() - t0)
             index = pd.Index(_key(req.idx, req.t))
 
@@ -162,14 +188,18 @@ class Experiment:
                 assert (pos >= 0).all(), "missing prediction"
                 return _pred[target][pos]
 
-            res: dict = {"horizons": {}, "connections": {}}
+            def take_raw(idx, t, target, _index=index, _raw=raw):
+                return _raw[target][_index.get_indexer(_key(idx, t))]
+
+            res: dict = {"horizons": {}, "horizons_raw": {}, "connections": {}}
             y = st.targets(hz.idx.to_numpy())
             for h in config.HORIZONS:
                 m = (hz.h == h).to_numpy()
-                res["horizons"][h] = {
-                    tgt: metrics.summarize(y[m, k], take(hz.idx[m], hz.t[m], tgt))
-                    for k, tgt in enumerate(("dep", "arr"))
-                }
+                for key, fn in (("horizons", take), ("horizons_raw", take_raw)):
+                    res[key][h] = {
+                        tgt: metrics.summarize(y[m, k], fn(hz.idx[m], hz.t[m], tgt))
+                        for k, tgt in enumerate(("dep", "arr"))
+                    }
             p_all = np.zeros(len(cp))
             for h in config.HORIZONS:
                 m = (cp.h == h).to_numpy()
@@ -191,8 +221,15 @@ class Experiment:
             # quantile calibration curve over all horizons (departure)
             qd = take(hz.idx, hz.t, "dep")
             res["calibration_dep"] = metrics.quantile_calibration(y[:, 0], qd).tolist()
+            if v in ("lgbm", "gnn") and "true_cause" in st.f:
+                from ripple.eval.explain import attribution_accuracy
+
+                attr = isolate.run(
+                    isolate.attribute_variant, self.dataset, v, self.attribution_rows()
+                )
+                res["attribution"] = attribution_accuracy(self, attr)
+                attr.to_parquet(path / "test_attribution.parquet", index=False)
             results["models"][v] = res
-            pred_store[v] = (req, pred, p_all)
             self._save_predictions(v, req, pred, p_all)
         (self.report_dir / "metrics.json").write_text(json.dumps(results, indent=1))
         return results

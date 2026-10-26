@@ -132,10 +132,10 @@ def train(
     epochs: int = typer.Option(None, help="GNN only"),
 ) -> None:
     """Train one model variant (see ripple.pipeline.VARIANTS)."""
-    from ripple.pipeline import Experiment
+    from ripple import isolate
 
     kw = {"epochs": epochs} if epochs else {}
-    Experiment(dataset).train(model, **kw)
+    isolate.run(isolate.train_variant, dataset, model, kw)
     console.print(f"trained {model} on {dataset}")
 
 
@@ -170,11 +170,34 @@ def run_all(
     if ablations:
         variants += ["lgbm_noweather", "gnn_norot", "gnn_noconn", "gnn_noapt", "gnn_noweather",
                      "gnn_nogru"]  # fmt: skip
+    from ripple import isolate
+
     exp = Experiment(dataset)
     for v in variants:
         console.print(f"[bold]training {v}[/bold]")
-        exp.train(v)
+        isolate.run(
+            isolate.train_variant, dataset, v, {"epochs": 8} if v.startswith("gnn_") else {}
+        )
     console.print(write_report(exp, exp.evaluate(variants)))
+
+
+@app.command()
+def demo(
+    dataset: str = typer.Option("synthetic"),
+    days: int = typer.Option(4, help="number of test days to precompute"),
+) -> None:
+    """Precompute dashboard replay data (predictions, P(miss), causes) for a few test days."""
+    from ripple.demo import build_demo
+
+    console.print(f"demo data in {build_demo(dataset, n_days=days)}")
+
+
+@app.command()
+def serve(port: int = typer.Option(8000), reload: bool = typer.Option(False)) -> None:
+    """Run the FastAPI backend (serves the built dashboard from app/web/dist too)."""
+    import uvicorn
+
+    uvicorn.run("ripple.api.main:app", host="127.0.0.1", port=port, reload=reload)
 
 
 if __name__ == "__main__":

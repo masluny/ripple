@@ -37,17 +37,22 @@ def write_report(exp, res: dict) -> str:
     lines += [
         "Test split = last 15% of days (chronological, 1-day gap). All numbers in minutes.",
         "CRPS is approximated from 19 quantiles. Coverage should be close to 80% / 90%.",
+        "Both models are recalibrated post hoc on the validation split (per-quantile offsets);",
+        "`raw` columns show the uncalibrated model.",
         "",
     ]
     for tgt, name in (("dep", "Departure"), ("arr", "Arrival")):
-        lines += [f"## {name} delay", "", "| model | h | MAE | CRPS | cov80 | cov90 | width90 |",
-                  "|---|---|---|---|---|---|---|"]  # fmt: skip
+        lines += [f"## {name} delay", "",
+                  "| model | h | MAE | CRPS | cov80 | cov90 | width90 | raw CRPS | raw cov90 |",
+                  "|---|---|---|---|---|---|---|---|---|"]  # fmt: skip
         for v, r in models.items():
             for h in config.HORIZONS:
                 m = _h(r["horizons"], h)[tgt]
+                raw = _h(r.get("horizons_raw", r["horizons"]), h)[tgt]
                 lines.append(
                     f"| {LABELS.get(v, v)} | {h}h | {m['mae']:.2f} | {m['crps']:.2f} | "
-                    f"{m['cov80']:.1%} | {m['cov90']:.1%} | {m['width90']:.0f} |"
+                    f"{m['cov80']:.1%} | {m['cov90']:.1%} | {m['width90']:.0f} | "
+                    f"{raw['crps']:.2f} | {raw['cov90']:.1%} |"
                 )
         lines.append("")
     lines += ["## Missed connections at WAW (MCT 35 min, slack <= 150 min)", "",

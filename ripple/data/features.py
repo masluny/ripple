@@ -76,7 +76,6 @@ class FeatureStore:
         local = f.sched_dep.dt.tz_convert(ZoneInfo("Europe/Warsaw"))
         self.hour = (local.dt.hour + local.dt.minute / 60).to_numpy(dtype=float)
         self.dow = local.dt.day_of_week.to_numpy(dtype=float)
-        self.month = local.dt.month.to_numpy(dtype=float)
         self.dep_load = self._slot_load(self.dep_ap, self.sd)
         self.arr_load = self._slot_load(self.arr_ap, self.sa)
         self._build_feeders()
@@ -206,7 +205,8 @@ class FeatureStore:
         cols["block"] = self.block[idx]
         cols["hour"] = self.hour[idx]
         cols["dow"] = self.dow[idx]
-        cols["month"] = self.month[idx]
+        # No month/season feature: with a chronological split the test months never occur in
+        # training, so the models could only extrapolate it blindly.
         cols["dep_load"] = self.dep_load[idx]
         cols["arr_load"] = self.arr_load[idx]
         cols["lead"] = self.sd[idx] - t
