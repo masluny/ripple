@@ -21,7 +21,7 @@ LABELS = {
     "gnn_noweather": "GNN - no weather",
     "gnn_nogru": "GNN - no GRU (static)",
 }
-COLORS = {"lgbm": "#718096", "gnn": "#2b6cb0"}
+COLORS = {"lgbm": "#a3a29b", "gnn": "#2a78d6"}
 
 
 def _h(d: dict, h: int):
@@ -66,48 +66,66 @@ def write_report(exp, res: dict) -> str:
             )
     lines.append("")
 
-    # Figure 1: CRPS by horizon
+    headline = {v: r for v, r in models.items() if v in ("lgbm", "gnn")}
+    plt.rcParams.update({"axes.spines.top": False, "axes.spines.right": False})
+
+    # Figure 1: CRPS by horizon, headline models only, values labelled on the bars
     fig, ax = plt.subplots(1, 2, figsize=(11, 3.6))
-    w = 0.8 / max(len(models), 1)
-    for k, (v, r) in enumerate(models.items()):
+    w = 0.38
+    for k, (v, r) in enumerate(headline.items()):
         for j, tgt in enumerate(("dep", "arr")):
             vals = [_h(r["horizons"], h)[tgt]["crps"] for h in config.HORIZONS]
-            ax[j].bar(np.arange(3) + k * w, vals, w, label=LABELS.get(v, v),
-                      color=COLORS.get(v))  # fmt: skip
+            bars = ax[j].bar(np.arange(3) + k * w, vals, w * 0.92, label=LABELS.get(v, v),
+                             color=COLORS.get(v))  # fmt: skip
+            ax[j].bar_label(bars, fmt="%.2f", fontsize=8, padding=2)
     for j, tgt in enumerate(("departure", "arrival")):
-        ax[j].set(xticks=np.arange(3) + w * (len(models) - 1) / 2,
-                  xticklabels=[f"{h}h" for h in config.HORIZONS], title=f"CRPS - {tgt} delay (lower is better)")  # fmt: skip
-    ax[1].legend(fontsize=7, loc="upper left")
+        ax[j].set(xticks=np.arange(3) + w / 2, xticklabels=[f"{h} h ahead" for h in config.HORIZONS],
+                  ylabel="CRPS (min)", title=f"{tgt.capitalize()} delay - CRPS, lower is better")  # fmt: skip
+        ax[j].grid(axis="y", color="#e6e4de", lw=0.8)
+        ax[j].set_axisbelow(True)
+    ax[0].legend(fontsize=8, loc="upper left", frameon=False)
     plt.tight_layout()
     plt.savefig(figs / "crps_by_horizon.png", dpi=120)
     plt.close()
 
-    # Figure 2: quantile calibration + connection reliability
+    # Figure 2: quantile calibration + connection reliability (6 h ahead), headline models
     fig, ax = plt.subplots(1, 2, figsize=(11, 4))
-    ax[0].plot([0, 1], [0, 1], "k:", lw=1)
-    ax[1].plot([0, 1], [0, 1], "k:", lw=1)
-    for v, r in models.items():
-        ax[0].plot(TAUS, r["calibration_dep"], marker=".", label=LABELS.get(v, v),
+    for a in ax:
+        a.plot([0, 1], [0, 1], color="#a3a29b", ls=":", lw=1)
+    for v, r in headline.items():
+        ax[0].plot(TAUS, r["calibration_dep"], marker="o", ms=3, lw=2, label=LABELS.get(v, v),
                    color=COLORS.get(v))  # fmt: skip
-        rel = np.array(_h(r["connections"], 1)["reliability"])
+        rel = np.array(_h(r["connections"], 6)["reliability"])
         if len(rel):
-            ax[1].plot(
-                rel[:, 0], rel[:, 1], marker="o", label=LABELS.get(v, v), color=COLORS.get(v)
-            )
-    ax[0].set(
-        xlabel="nominal quantile",
-        ylabel="observed P(y <= q)",
-        title="Quantile calibration (departure)",
-    )
-    ax[1].set(
-        xlabel="predicted P(miss)",
-        ylabel="observed miss rate",
-        title="Connection reliability (1h ahead)",
-    )
-    ax[0].legend(fontsize=7)
+            ax[1].plot(rel[:, 0], rel[:, 1], marker="o", ms=4, lw=2, label=LABELS.get(v, v),
+                       color=COLORS.get(v))  # fmt: skip
+    ax[0].set(xlabel="nominal quantile", ylabel="observed share of outcomes below it",
+              title="Quantile calibration, departure delay (test)")  # fmt: skip
+    ax[1].set(xlabel="predicted P(miss)", ylabel="observed miss rate",
+              title="Missed-connection reliability, 6 h ahead (test)")  # fmt: skip
+    ax[0].legend(fontsize=8, frameon=False)
     plt.tight_layout()
     plt.savefig(figs / "calibration.png", dpi=120)
     plt.close()
+
+    # Figure 3: ablations - change in 6 h departure CRPS relative to the full GNN
+    if "gnn" in models and len(models) > 2:
+        base = _h(models["gnn"]["horizons"], 6)["dep"]["crps"]
+        abl = [(LABELS.get(v, v), 100 * (_h(r["horizons"], 6)["dep"]["crps"] - base) / base)
+               for v, r in models.items() if v != "gnn"]  # fmt: skip
+        abl.sort(key=lambda x: x[1])
+        fig, ax = plt.subplots(figsize=(8, 0.45 * len(abl) + 1))
+        ax.barh([a[0] for a in abl], [a[1] for a in abl], color="#2a78d6", height=0.6)
+        for i, (_, val) in enumerate(abl):  # labels right of zero so negatives do not hit tick text
+            ax.text(max(val, 0) + 0.3, i, f"{val:+.1f}%", va="center", fontsize=8)
+        ax.axvline(0, color="#52514e", lw=1)
+        ax.set(xlabel="change in departure-delay CRPS at 6 h vs full GNN (%, higher = worse)",
+               title="Ablations")  # fmt: skip
+        plt.tight_layout()
+        plt.savefig(figs / "ablations.png", dpi=120)
+        plt.close()
+        lines += ["![ablations](figures/ablations.png)", ""]
+
     lines += [
         "![CRPS](figures/crps_by_horizon.png)",
         "",
