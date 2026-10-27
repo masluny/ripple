@@ -73,8 +73,8 @@ alternatives (AeroDataBox, FlightAware AeroAPI, Aviationstack) are compared in
 
 ### Synthetic network
 
-`ripple/data/synthetic.py` simulates one year of a LOT-like network: 78 aircraft (787, 737 MAX,
-E-jets, Q400), 58 real airports, about 340 legs per day, seven WAW banks aligned with real LOT
+`ripple/data/synthetic.py` simulates one year of a LOT-like network: 77 aircraft (787, 737 MAX,
+E-jets, Q400), 58 real airports, about 330 legs per day, seven WAW banks aligned with real LOT
 take-off peaks, nightstops, and great-circle block times. Weather is regional and seasonal (fog,
 snow, thunderstorms, wind storms), and a TAF-like forecast is issued every 6 h. The delay process
 combines primary delay, reactionary delay through rotations, de-icing/ATC slowdowns, ATFM at the
@@ -127,7 +127,95 @@ itineraries.
 
 ## Results (synthetic test set: last 15% of days, Nov-Dec)
 
-RESULTS_PLACEHOLDER
+Full tables: [`reports/synthetic/results.md`](reports/synthetic/results.md) ·
+breakdown: [`reports/synthetic/breakdown.md`](reports/synthetic/breakdown.md) ·
+GNN sweep: [`reports/synthetic/gnn_sweep.json`](reports/synthetic/gnn_sweep.json).
+Both models are recalibrated post hoc on the validation split in the same way.
+
+**Departure / arrival delay, CRPS in minutes (lower is better), 19-quantile approximation**
+
+| horizon | LightGBM dep | GNN dep | LightGBM arr | GNN arr | 90% interval coverage (LGBM / GNN, dep) |
+|---|---|---|---|---|---|
+| 1 h | 7.19 | **7.16** (-0.4%) | 8.18 | **8.13** (-0.6%) | 88.7% / 87.6% |
+| 3 h | 8.71 | **8.47** (-2.8%) | 9.64 | **9.35** (-3.0%) | 87.9% / 87.1% |
+| 6 h | 9.57 | **9.05** (-5.5%) | 10.49 | **9.92** (-5.4%) | 87.3% / 86.8% |
+
+Day-block bootstrap of the departure CRPS difference (GNN - LightGBM, 55 test days, 95% CI):
+1 h -0.03 [-0.15, +0.09] (a tie), 3 h -0.24 [-0.45, -0.05], 6 h -0.52 [-0.86, -0.24].
+
+**Where the graph helps.** The GNN's gain comes from flights whose inbound aircraft *has not
+departed yet* at prediction time: -3.8% CRPS at 3 h, -7.7% at 6 h. Its information then has to
+travel through the rotation edge from the upstream leg's own context (weather and congestion at
+the upstream airport, that leg's own inbound). LightGBM only sees what is already observed.
+Once the inbound has left, the hand-made "projected reactionary delay" feature is close to the
+truth, and LightGBM is equal or slightly better (+0.6% to +3%).
+
+**Missed connections at WAW** (MCT 35 min, scheduled connection ≤ 150 min, 8.7% miss rate in test)
+
+| horizon | Brier LGBM | Brier GNN | Brier skill LGBM | Brier skill GNN | AUC LGBM / GNN |
+|---|---|---|---|---|---|
+| 1 h | **0.0215** | 0.0218 | 0.731 | 0.727 | 0.984 / 0.982 |
+| 3 h | 0.0400 | **0.0389** | 0.500 | 0.513 | 0.944 / 0.947 |
+| 6 h | 0.0578 | **0.0548** | 0.277 | 0.314 | 0.869 / 0.880 |
+
+At 1 h most inbounds are already airborne or landed, so P(miss) is mostly arithmetic and both
+models agree. The further ahead, the more the forecasts matter. The reliability curves (below)
+stay close to the diagonal. At 6 h the GNN slightly over-predicts mid-range risks (predicted
+0.65 → observed 0.60), which is consistent with the independence assumption ignoring holds.
+
+**Explanations vs simulator ground truth** (1,500 test flights that left ≥ 20 min late, explained
+1 h before departure; a hit = the top occlusion group matches the true dominant cause)
+
+| true cause | n | LightGBM | GNN |
+|---|---|---|---|
+| reactionary (inbound aircraft) | 427 | 69% | **79%** |
+| weather at either end | 189 | **91%** | 85% |
+| ATFM / destination | 264 | **65%** | 53% |
+| slot congestion | 325 | **84%** | 29% |
+| connection hold | 9 | 22% | 22% |
+| **overall** | 1214 | **75%** | 60% |
+
+The GNN explains reactionary delay better, which is the case the project is about, but it
+attributes WAW-bank congestion to the *feeder (connection)* group. In the graph, the
+connection edges carry much the same information as the airport edges: the feeders are the
+bank. Occlusion cannot separate correlated channels. That is an honest limitation of this
+explanation method, not of the forecast.
+
+**Ablations** (GNN variants, same training budget; test CRPS, departure delay)
+
+| variant | CRPS dep 1 h | CRPS dep 3 h | CRPS dep 6 h | Δ vs full GNN at 6 h | miss BSS 6 h |
+|---|---|---|---|---|---|
+| **GNN (full)** | 7.16 | 8.47 | 9.05 | +0.0% | 0.314 |
+| GNN - no rotation edges | 7.22 | 8.66 | 9.40 | +3.8% | 0.279 |
+| GNN - no connection edges | 7.16 | 8.48 | 9.07 | +0.3% | 0.304 |
+| GNN - no airport/time edges | 7.25 | 8.59 | 9.09 | +0.4% | 0.295 |
+| GNN - no GRU (single snapshot) | 7.24 | 8.47 | 9.02 | -0.4% | 0.306 |
+| GNN - no weather inputs | 8.02 | 9.87 | 10.71 | +18.4% | 0.205 |
+| LightGBM | 7.19 | 8.71 | 9.57 | +5.8% | 0.277 |
+| LightGBM - no weather | 8.30 | 10.17 | 10.89 | +20.3% | 0.176 |
+
+- **Rotation edges carry the gain.** Without them the GNN loses most of its lead (6 h: +3.8%,
+  miss BSS 0.314 → 0.279). That is the reactionary-delay mechanism the project set out to model.
+- **Connection edges add almost nothing** in this simulator. Connection holds are only ~2% of
+  simulated delay minutes, so there is little to learn. Real hub data with real passenger flows
+  may differ.
+- **Airport/time edges** help at 1-3 h (shared congestion and weather in the same bank).
+- **The GRU only helps at 1 h** (+1.1% without it). At 3-6 h a single snapshot is as good. The
+  temporal encoder earns its cost mainly for short-range updates.
+- **Weather is the single most important input group** for both models (+18-20% CRPS without
+  it), which is expected in a winter test period with fog and snow.
+
+**Did it take tuning?** Yes, and it is documented. The first GNN tied with LightGBM. Two changes
+made the difference: (1) regularisation (dropout 0.2, weight decay 1e-3, lr 1e-3), chosen on
+validation; (2) a preprocessing fix. Delay-like inputs had been clipped at ±6 robust units, so
+every inbound delay above about an hour looked the same to the network. They are now passed
+through `asinh` plus a linear channel in hours. Before the fix the GNN lost to LightGBM by up to
+11% on flights whose inbound delay was already known. The removed month feature and the
+`reg` → `reg_v2` sweep are in the git history and in `gnn_sweep.json`.
+
+![CRPS by horizon](reports/synthetic/figures/crps_by_horizon.png)
+![Calibration](reports/synthetic/figures/calibration.png)
+![Ablations](reports/synthetic/figures/ablations.png)
 
 ## Limitations (read these before quoting any number)
 

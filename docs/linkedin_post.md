@@ -10,7 +10,7 @@ So, when it comes to European aviation, around 40-48% of all delay minutes in 20
 
 That is why for last weeks I was building Ripple. It's a graph neural network (heterogeneous GATv2 + GRU) where every flight is a node and the delay can travel between them by aircraft rotations, connections at WAW and shared airport and weather. It does not give just one number, it predicts the whole distribution of delay 1, 3 and 6 hours ahead, the probability that a connection will be missed and also it tries to explain why, for example "inherited from previous leg of SP-LxA from CDG".
 
-To be fair, my GNN had to beat a LightGBM model with exactly the same inputs. On the test set it got CRPS {GNN_CRPS} min vs {LGBM_CRPS} min, with Brier skill {BSS} for missed connections, so I think it's a good start but for sure not the end.
+To be fair, my GNN had to beat a LightGBM model with exactly the same inputs. Honestly at the beginning it was just a tie, but after some fixes 6 hours ahead it got CRPS 9.05 min vs 9.57 min and Brier skill 0.31 vs 0.28 for missed connections, and 1 hour ahead it is still basically a tie, so I think it's a good start but for sure not the end.
 
 However, i have to be honest about one thing. Right now the model is trained on a synthetic LOT-like network calibrated on real OpenSky rotations, because real scheduled times need API acces. Luckily, the data collectors for OpenSky, METAR and TAF are already running, so maybe in few months I will show real results.
 

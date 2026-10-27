@@ -155,28 +155,33 @@ def evaluate(
 
 @app.command("run-all")
 def run_all(
-    dataset: str = typer.Option("synthetic"),
+    dataset: str = typer.Option("synthetic", help="synthetic | real"),
     ablations: bool = typer.Option(True, help="also train ablation variants"),
     rebuild: bool = typer.Option(False, help="rebuild the dataset first"),
+    quick: bool = typer.Option(False, help="smoke run: 45 simulated days, 1 GNN epoch"),
 ) -> None:
     """Build data (if needed), train LightGBM + GNN (+ ablations), evaluate, write the report."""
+    from ripple import isolate
     from ripple.data.build import build_real, build_synthetic, dataset_dir
     from ripple.eval.report import write_report
     from ripple.pipeline import Experiment
 
+    if quick:
+        dataset = f"{dataset}-quick"
     if rebuild or not (dataset_dir(dataset) / "flights.parquet").exists():
-        build_synthetic() if dataset == "synthetic" else build_real()
+        if dataset.startswith("synthetic"):
+            build_synthetic(days=45 if quick else 365, name=dataset)
+        else:
+            build_real()
     variants = ["lgbm", "gnn"]
     if ablations:
         variants += ["lgbm_noweather", "gnn_norot", "gnn_noconn", "gnn_noapt", "gnn_noweather",
                      "gnn_nogru"]  # fmt: skip
-    from ripple import isolate
-
     exp = Experiment(dataset)
     for v in variants:
         console.print(f"[bold]training {v}[/bold]")
         isolate.run(
-            isolate.train_variant, dataset, v, {"epochs": 8} if v.startswith("gnn_") else {}
+            isolate.train_variant, dataset, v, {"epochs": 1} if quick and "gnn" in v else {}
         )
     console.print(write_report(exp, exp.evaluate(variants)))
 

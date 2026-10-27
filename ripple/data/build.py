@@ -18,11 +18,13 @@ def dataset_dir(name: str) -> Path:
     return config.PROCESSED / name
 
 
-def build_synthetic(days: int = 365, seed: int = 7, start: str = "2025-01-01") -> Path:
+def build_synthetic(
+    days: int = 365, seed: int = 7, start: str = "2025-01-01", name: str = "synthetic"
+) -> Path:
     from ripple.data.synthetic import SimConfig, generate
 
     flights, wx, fc = generate(SimConfig(start=start, days=days, seed=seed))
-    return _save("synthetic", validate_flights(flights), wx, fc)
+    return _save(name, validate_flights(flights), wx, fc)
 
 
 def build_real() -> Path:
